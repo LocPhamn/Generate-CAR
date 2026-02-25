@@ -736,12 +736,21 @@ if __name__ == '__main__':
                                  triangle_pts=triangle_area)
 
             # ===== Log góc giữa P1→P2 và P1→P2' =====
-            P1 = np.array(box_3d_points[1], dtype=float)   # bottom_front_right
-            P2 = np.array(box_3d_points[2], dtype=float)   # bottom_back_right
-            x_rotate_degree = get_rotate_degree_cross_line(va_pts, P1, [P2, P1])
-            print(f"Rotate degree for box {x1,y1,x2,y2}: {y_rotate_degree:.2f} degrees and x_rotate_degree: {x_rotate_degree:.2f} degrees")
+            max_distance = 0
+            farthest_pt_idx = 0
+            for idx_pt, pt in enumerate(box_3d_points[0:4]):
+                dist = np.linalg.norm(np.array(pt) - va_pts)
+                if dist > max_distance:
+                    max_distance = dist
+                    farthest_pt_idx = idx_pt
             
-            dx_offset, dy_offset = -10, -10
+            P1 = np.array(box_3d_points[farthest_pt_idx], dtype=float)   # bottom_front_right
+            P2 = np.array(box_3d_points[farthest_pt_idx - 1], dtype=float)   # bottom_back_right
+            x_rotate_degree = get_rotate_degree_cross_line(va_pts, P1, [P2, P1])
+            print("x_rotate_degree:", x_rotate_degree)
+            print(f"Farthest point index: {farthest_pt_idx} and Opposite: {farthest_pt_idx + 1}")
+            
+            dx_offset, dy_offset = -10, 10
             P2_prime = P1 + np.array([dx_offset, dy_offset], dtype=float)
 
             v_P1_P2       = P2 - P1
