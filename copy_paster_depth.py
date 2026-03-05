@@ -535,6 +535,31 @@ def normalize_yaw(angle_deg):
     return angle_deg % 360.0
 
 
+def wait_for_file(file_path, timeout=300, poll_interval=2.0):
+    """
+    Chờ cho đến khi file xuất hiện và có size > 0.
+    
+    Args:
+        file_path: đường dẫn file cần chờ
+        timeout: số giây tối đa chờ (mặc định 300s)
+        poll_interval: khoảng thời gian giữa các lần kiểm tra (giây)
+    
+    Returns:
+        True nếu file xuất hiện đúng hạn, False nếu timeout
+    """
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            print(f"[WAIT] File ready: {file_path}")
+            return True
+        remaining = int(deadline - time.time())
+        print(f"[WAIT] Waiting for {file_path} ... ({remaining}s remaining)")
+        time.sleep(poll_interval)
+    print(f"[WAIT] Timeout! File not found after {timeout}s: {file_path}")
+    return False
+
+
 def send_to_hunyuan3d(image_path, yaw_deg, hunyuan_url, output_dir, pitch_deg=0):
     os.makedirs(output_dir, exist_ok=True)
     image_path_abs = os.path.abspath(image_path)
@@ -544,7 +569,7 @@ def send_to_hunyuan3d(image_path, yaw_deg, hunyuan_url, output_dir, pitch_deg=0)
         "image_name": image_name,
         "yaw_deg": yaw_deg,
         "pitch_deg": float(pitch_deg),
-        "img_size": 1024,
+        "img_size": 640,
     }
     try:
         response = requests.post(
@@ -577,6 +602,9 @@ if __name__ == '__main__':
     all_num_objects = num_images + (num_images // 2)
     alpha_folder = "alpha_images"
     rotate_alpha_folder = r"generated_images/3d"
+    # texture_files = [f for f in os.listdir(rotate_alpha_folder) if f.startswith("textured_") and f.endswith(".glb")]
+    # print(f"Found {len(texture_files)} textured alpha files in '{rotate_alpha_folder}'")
+    # exit()
     # upview vehicle paths
     preprocess_vehicles = [os.path.join("images/upview_vehicles/preprocess", f) for f in os.listdir("images/upview_vehicles/preprocess")]
     postprocess_vehicles = [os.path.join("images/upview_vehicles/postprocess", f) for f in os.listdir("images/upview_vehicles/postprocess")]
@@ -592,50 +620,57 @@ if __name__ == '__main__':
     os.makedirs(img_folder, exist_ok=True)
     os.makedirs(label_folder, exist_ok=True)
     os.makedirs(alpha_folder, exist_ok=True)
+    
     # --PREPARE UPVIEW VEHICLES---
     # for idx, path in enumerate(preprocess_vehicles):
     #     crop_vehicle(path,idx)
 
-    img_ori_paths = []
-    checked_paths = set()
-    fixed_alpha_name = "construction_truck-(77).png"
-    fixed_alpha_path = os.path.join(alpha_folder, fixed_alpha_name)
-
-    if os.path.exists(fixed_alpha_path):
-        print(f"Using fixed alpha image for debug: {fixed_alpha_path}")
-        alpha_paths = [fixed_alpha_path]
-    else:
-        print(f"Fixed alpha image not found: {fixed_alpha_path}")
-
-    if not alpha_paths:
-        for i in range(all_num_objects):
-            while True:
-                image_path = random.choice(all_vehicle_paths)
-                
-                if image_path in checked_paths:
-                    continue
-                    
-                image = cv2.imread(image_path)
-                if image is not None and check_image_size(image, min_size=100):
-                    img_ori_paths.append(image_path)
-                    checked_paths.add(image_path)
-                    break
-        print("Chọn được ảnh:", img_ori_paths)
-        print("Tổng số ảnh đã chọn:", len(img_ori_paths))
+    # --LOAD ALPHA IMAGES DIRECTLY (alpha images already prepared)---
+    # alpha_paths = [
+    #     os.path.join(alpha_folder, f)
+    #     for f in os.listdir(alpha_folder)
+    #     if f.lower().endswith(".png")
+    # ]
+    # -- Load ảnh alpha ở alpha_folder đã có texture ở folder 3d
+    alpha_paths = [
+        os.path.join(alpha_folder, f.replace("textured_", "").replace(".glb", ".png"))
+        for f in os.listdir(rotate_alpha_folder)
+        if f.lower().endswith(".glb") and f.startswith("textured_")
+    ]
     
-    if not alpha_paths:
-        for img in img_ori_paths:
-            alpha_path = os.path.join(alpha_folder, os.path.basename(img).replace(".jpg", ".png"))
-            if not os.path.exists(alpha_path):
-                obj_img = cv2.imread(img)
-                rm_background_img = remove_vehicle_background(obj_img)
-                if rm_background_img is None:
-                    print(f"No vehicle detected in {img}, skipping...")
-                    continue
-                resized_img = minimum_object_size(rm_background_img, max_size=256)[0]
-                cv2.imwrite(alpha_path, resized_img)
-                print(f"Saved alpha image: {alpha_path}")
-            alpha_paths.append(alpha_path)
+    print(f"Loaded {len(alpha_paths)} alpha images from '{alpha_folder}'")
+    # img_ori_paths = []
+    # checked_paths = set()
+
+    # --- SKIP: select from all_vehicle_paths ---
+    # if not alpha_paths:
+    #     for i in range(all_num_objects):
+    #         while True:
+    #             image_path = random.choice(all_vehicle_paths)
+    #             if image_path in checked_paths:
+    #                 continue
+    #             image = cv2.imread(image_path)
+    #             if image is not None and check_image_size(image, min_size=100):
+    #                 img_ori_paths.append(image_path)
+    #                 checked_paths.add(image_path)
+    #                 break
+    #     print("Chọn được ảnh:", img_ori_paths)
+    #     print("Tổng số ảnh đã chọn:", len(img_ori_paths))
+
+    # --- SKIP: remove background & save alpha ---
+    # if not alpha_paths:
+    #     for img in img_ori_paths:
+    #         alpha_path = os.path.join(alpha_folder, os.path.basename(img).replace(".jpg", ".png"))
+    #         if not os.path.exists(alpha_path):
+    #             obj_img = cv2.imread(img)
+    #             rm_background_img = remove_vehicle_background(obj_img)
+    #             if rm_background_img is None:
+    #                 print(f"No vehicle detected in {img}, skipping...")
+    #                 continue
+    #             resized_img = minimum_object_size(rm_background_img, max_size=256)[0]
+    #             cv2.imwrite(alpha_path, resized_img)
+    #             print(f"Saved alpha image: {alpha_path}")
+    #         alpha_paths.append(alpha_path)
     
     bg_img = cv2.imread(img_bg_path)
     depth_map = estimate_depth(bg_img)
@@ -680,23 +715,26 @@ if __name__ == '__main__':
     base_p2 = np.array(edge2[1], dtype=float)
     midpoint = ((base_p1 + base_p2) / 2).astype(int)
     
-    cv2.line(bg_img, tuple(va_pts.astype(int)), tuple(midpoint), (0,255,255), 3)
-    cv2.circle(bg_img, tuple(va_pts.astype(int)), 10, (255,255,255), -1)
-    cv2.circle(bg_img, tuple(midpoint), 10, (0,165,255), -1)
+    # cv2.line(bg_img, tuple(va_pts.astype(int)), tuple(midpoint), (0,255,255), 3)
+    # cv2.circle(bg_img, tuple(va_pts.astype(int)), 10, (255,255,255), -1)
+    # cv2.circle(bg_img, tuple(midpoint), 10, (0,165,255), -1)
 
     pts_new = np.maximum(ground_polygon - 10, 0)
-    cv2.polylines(bg_img, [triangle_area], isClosed=True, color=(0,0,255), thickness=2)
-    cv2.polylines(bg_img, [pts_new], isClosed=True, color=(0,255,0), thickness=2)
+    # cv2.polylines(bg_img, [triangle_area], isClosed=True, color=(0,0,255), thickness=2)
+    # cv2.polylines(bg_img, [pts_new], isClosed=True, color=(0,255,0), thickness=2)
     # cv2.drawContours(bg_img, [largest], -1, color=(255,0,0), thickness=2)
     cv2.imwrite("ground_mask_visualization.png", bg_img)
-    path = "generated_images/3d/construction_truck-(77)_view.png"
-
     # ---GENERATE IMAGES---
     for i in range(num_images):
         boxes = []
         polygons = []  # Lưu polygon của mỗi object
 
-        alpha_path_process = [alpha_paths[0]] * num_objects
+        # alpha_path_process = alpha_paths[i:i+num_objects] 
+        # alpha_path_process = [alpha_paths[0]] * num_objects
+        alpha_path_process = [
+                alpha_paths[(i + j) % len(alpha_paths)]
+                for j in range(num_objects)
+            ]
 
         print(f"Processing image {i+1}/{num_images}")
         print("len of alpha paths:", len(alpha_path_process))
@@ -736,21 +774,14 @@ if __name__ == '__main__':
                                  triangle_pts=triangle_area)
 
             # ===== Log góc giữa P1→P2 và P1→P2' =====
-            max_distance = 0
-            farthest_pt_idx = 0
-            for idx_pt, pt in enumerate(box_3d_points[0:4]):
-                dist = np.linalg.norm(np.array(pt) - va_pts)
-                if dist > max_distance:
-                    max_distance = dist
-                    farthest_pt_idx = idx_pt
+
             
-            P1 = np.array(box_3d_points[farthest_pt_idx], dtype=float)   # bottom_front_right
-            P2 = np.array(box_3d_points[farthest_pt_idx - 1], dtype=float)   # bottom_back_right
+            P1 = np.array(box_3d_points[P1_IDX], dtype=float)   # bottom_front_right
+            P2 = np.array(box_3d_points[P2_IDX], dtype=float)   # bottom_back_right
             x_rotate_degree = get_rotate_degree_cross_line(va_pts, P1, [P2, P1])
             print("x_rotate_degree:", x_rotate_degree)
-            print(f"Farthest point index: {farthest_pt_idx} and Opposite: {farthest_pt_idx + 1}")
             
-            dx_offset, dy_offset = -10, 10
+            dx_offset, dy_offset = DX_OFFSET, DY_OFFSET
             P2_prime = P1 + np.array([dx_offset, dy_offset], dtype=float)
 
             v_P1_P2       = P2 - P1
@@ -770,15 +801,26 @@ if __name__ == '__main__':
                 print("[ANGLE] Không tính được góc (vector có độ dài = 0)")
 
             if send_hunyuan:
-                yaw_deg = normalize_yaw(angle_P1P2_P1P2prime) 
+                yaw_deg = normalize_yaw(angle_P1P2_P1P2prime ) 
                 pitch_deg = normalize_yaw(x_rotate_degree)
                 alpha_path = alpha_path_process[idx] if idx < len(alpha_path_process) else None
                 if alpha_path:
-                    send_to_hunyuan3d(alpha_path, int(yaw_deg), hunyuan_url, hunyuan_output_dir, int(pitch_deg))
+                    result = send_to_hunyuan3d(alpha_path, int(yaw_deg), hunyuan_url, hunyuan_output_dir, int(pitch_deg))
+                    if result is None:
+                        print(f"[SKIP] Hunyuan3D failed for {alpha_path}, skipping rotate paste.")
+                        continue
 
                     rotate_alpha_path = f"{rotate_alpha_folder}/{os.path.basename(alpha_path).replace('.png', '_view.png')}"
                     print(f"Rotate alpha path: {rotate_alpha_path}")
+
+                    if not wait_for_file(rotate_alpha_path, timeout=900, poll_interval=2.0):
+                        print(f"[SKIP] Output file not ready: {rotate_alpha_path}, skipping rotate paste.")
+                        continue
+
                     rotate_alpha_img = cv2.imread(rotate_alpha_path, cv2.IMREAD_UNCHANGED)
+                    if rotate_alpha_img is None:
+                        print(f"[SKIP] Could not read {rotate_alpha_path}, skipping rotate paste.")
+                        continue
                     rotate_alpha_img, bbox = get_tight_bbox_from_alpha(rotate_alpha_img)
                     rotate_alpha_img = cv2.cvtColor(rotate_alpha_img, cv2.COLOR_BGRA2RGBA)
 
@@ -805,7 +847,7 @@ if __name__ == '__main__':
                     cv_img = np.array(new_bg_img)
                     cv_img = draw_3d_box(cv_img, box_3d_points, color=(0, 255, 0), thickness=2,
                     triangle_pts=triangle_area)
-        # cv_img = np.array(new_bg_img)
+        cv_img = np.array(new_bg_img)
 
             
         if num_objects % 2 == 1:
