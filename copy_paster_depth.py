@@ -21,6 +21,7 @@ from labeling import labeling_custom
 import argparse
 from glob import glob
 from copy_paster_config import *
+from image_process import enhance_edges
 import requests
 
 # Grounded SAM2 parameters
@@ -57,6 +58,7 @@ def argument_parser():
     parser.add_argument("--hunyuan_url", type=str, default=os.environ.get("HUNYUAN3D_URL", "http://hunyuan3d:8000"),
                         help="Hunyuan3D API base URL")
     parser.add_argument("--hunyuan_output_dir", type=str, default="generated_images/3d", help="Output dir for 3D outputs")
+    parser.add_argument("--visualize", "-v", type=str, default="n", help="Visualize the results or not (y/n)")
 
     args = parser.parse_args()
     return args
@@ -311,7 +313,8 @@ def paste_object_with_alpha(bg_path, bg_img, obj_rgba,alpha_path, ground_polygon
     print("----------------------------------------------------------")
 
     obj_resized = cv2.resize(obj_rgba, new_size, interpolation=cv2.INTER_CUBIC)
-    obj_resized = cv2.cvtColor(obj_resized, cv2.COLOR_BGRA2RGBA)
+    sharp_obj = enhance_edges(obj_resized)
+    obj_resized = cv2.cvtColor(sharp_obj, cv2.COLOR_BGRA2RGBA)
     
     # Tìm polygon từ alpha mask của object
     obj_polygon, obj_contour = get_polygon_from_alpha_mask(obj_resized, num_points_range=(4, 6))
@@ -560,7 +563,7 @@ def wait_for_file(file_path, timeout=300, poll_interval=2.0):
     return False
 
 
-def send_to_hunyuan3d(image_path, yaw_deg, hunyuan_url, output_dir, pitch_deg=0):
+def send_to_hunyuan3d(image_path, yaw_deg, hunyuan_url, output_dir, pitch_deg=0, turn=1):
     os.makedirs(output_dir, exist_ok=True)
     image_path_abs = os.path.abspath(image_path)
     image_name = os.path.basename(image_path)
@@ -569,6 +572,7 @@ def send_to_hunyuan3d(image_path, yaw_deg, hunyuan_url, output_dir, pitch_deg=0)
         "image_name": image_name,
         "yaw_deg": yaw_deg,
         "pitch_deg": float(pitch_deg),
+        "turn": turn,
         "img_size": 640,
     }
     try:
@@ -639,6 +643,9 @@ if __name__ == '__main__':
     ]
     
     print(f"Loaded {len(alpha_paths)} alpha images from '{alpha_folder}'")
+    if not alpha_paths:
+        print("ERROR: No alpha images found! Please prepare alpha images first.")
+        exit(1)
     # img_ori_paths = []
     # checked_paths = set()
 
@@ -683,7 +690,7 @@ if __name__ == '__main__':
         cv2.imwrite("ground_mask_V1.png", mask*255) 
     
     # Phủ các vết nứt trong mask
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 50))
     closed_mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     cv2.imwrite("ground_mask_V2.png", closed_mask*255)
 
@@ -715,14 +722,16 @@ if __name__ == '__main__':
     base_p2 = np.array(edge2[1], dtype=float)
     midpoint = ((base_p1 + base_p2) / 2).astype(int)
     
-    # cv2.line(bg_img, tuple(va_pts.astype(int)), tuple(midpoint), (0,255,255), 3)
-    # cv2.circle(bg_img, tuple(va_pts.astype(int)), 10, (255,255,255), -1)
-    # cv2.circle(bg_img, tuple(midpoint), 10, (0,165,255), -1)
+    if args.visualize.lower() == "y":
+        cv2.line(bg_img, tuple(va_pts.astype(int)), tuple(midpoint), (0,255,255), 3)
+        cv2.circle(bg_img, tuple(va_pts.astype(int)), 10, (255,255,255), -1)
+        cv2.circle(bg_img, tuple(midpoint), 10, (0,165,255), -1)
 
     pts_new = np.maximum(ground_polygon - 10, 0)
-    # cv2.polylines(bg_img, [triangle_area], isClosed=True, color=(0,0,255), thickness=2)
-    # cv2.polylines(bg_img, [pts_new], isClosed=True, color=(0,255,0), thickness=2)
-    # cv2.drawContours(bg_img, [largest], -1, color=(255,0,0), thickness=2)
+    if args.visualize.lower() == "y":
+        cv2.polylines(bg_img, [triangle_area], isClosed=True, color=(0,0,255), thickness=2)
+        cv2.polylines(bg_img, [pts_new], isClosed=True, color=(0,255,0), thickness=2)
+        cv2.drawContours(bg_img, [largest], -1, color=(255,0,0), thickness=2)
     cv2.imwrite("ground_mask_visualization.png", bg_img)
     # ---GENERATE IMAGES---
     for i in range(num_images):
@@ -731,10 +740,9 @@ if __name__ == '__main__':
 
         # alpha_path_process = alpha_paths[i:i+num_objects] 
         # alpha_path_process = [alpha_paths[0]] * num_objects
-        alpha_path_process = [
-                alpha_paths[(i + j) % len(alpha_paths)]
-                for j in range(num_objects)
-            ]
+        alpha_path_process = random.sample(alpha_paths, min(num_objects, len(alpha_paths))) \
+            if len(alpha_paths) >= num_objects \
+            else random.choices(alpha_paths, k=num_objects)
 
         print(f"Processing image {i+1}/{num_images}")
         print("len of alpha paths:", len(alpha_path_process))
@@ -742,6 +750,9 @@ if __name__ == '__main__':
         visulize_bg = bg_img.copy()
         
         for alpha_path in alpha_path_process:
+            if alpha_path == "alpha_images/construction_truck.png":
+                continue
+             
             alpha_img = cv2.imread(alpha_path, cv2.IMREAD_UNCHANGED)
             alpha_img, bbox = get_tight_bbox_from_alpha(alpha_img)
             alpha_img = cv2.cvtColor(alpha_img, cv2.COLOR_BGRA2RGBA)
@@ -753,7 +764,7 @@ if __name__ == '__main__':
             )
             boxes.append([x1, y1, x2, y2])
             polygons.append(obj_polygon)
-            
+        
             labeling_custom(img_bg_path, f"{img_folder}/out_{i+1}.png", alpha_path, 
                         x1/new_bg_img.width, y1/new_bg_img.height, 
                         x2/new_bg_img.width, y2/new_bg_img.height)
@@ -770,17 +781,14 @@ if __name__ == '__main__':
                 vanishing_point=va_pts  
             )
             y_rotate_degree = get_rotate_degree(va_pts, midpoint, [(x1, y1), (x2, y2)])
-            cv_img = draw_3d_box(cv_img, box_3d_points, color=(0, 255, 0), thickness=2,
-                                 triangle_pts=triangle_area)
+            if args.visualize.lower() == "y":
+                cv_img = draw_3d_box(cv_img, box_3d_points, color=(0, 255, 0), thickness=2,
+                                    triangle_pts=triangle_area)
 
             # ===== Log góc giữa P1→P2 và P1→P2' =====
-
             
             P1 = np.array(box_3d_points[P1_IDX], dtype=float)   # bottom_front_right
             P2 = np.array(box_3d_points[P2_IDX], dtype=float)   # bottom_back_right
-            x_rotate_degree = get_rotate_degree_cross_line(va_pts, P1, [P2, P1])
-            print("x_rotate_degree:", x_rotate_degree)
-            
             dx_offset, dy_offset = DX_OFFSET, DY_OFFSET
             P2_prime = P1 + np.array([dx_offset, dy_offset], dtype=float)
 
@@ -789,6 +797,8 @@ if __name__ == '__main__':
 
             len_v1 = np.linalg.norm(v_P1_P2)
             len_v2 = np.linalg.norm(v_P1_P2_prime)
+            
+            x_rotate_degree = get_rotate_degree_cross_line(va_pts, P1, [va_pts, P2_prime])            
 
             if len_v1 > 1e-6 and len_v2 > 1e-6:
                 cos_a = np.dot(v_P1_P2, v_P1_P2_prime) / (len_v1 * len_v2)
@@ -797,15 +807,17 @@ if __name__ == '__main__':
                 print(f"[ANGLE] vec P1→P2       = {v_P1_P2.tolist()}")
                 print(f"[ANGLE] vec P1→P2'      = {v_P1_P2_prime.tolist()}")
                 print(f"[ANGLE] Góc P1P2 vs P1P2' = {angle_P1P2_P1P2prime:.2f}°")
+                print(f"[ANGLE] X ROTATION = {x_rotate_degree:.2f}°")
             else:
                 print("[ANGLE] Không tính được góc (vector có độ dài = 0)")
 
             if send_hunyuan:
-                yaw_deg = normalize_yaw(angle_P1P2_P1P2prime ) 
+                flip_deg = random.choice([0, 180])
+                yaw_deg = normalize_yaw(angle_P1P2_P1P2prime + flip_deg) 
                 pitch_deg = normalize_yaw(x_rotate_degree)
                 alpha_path = alpha_path_process[idx] if idx < len(alpha_path_process) else None
                 if alpha_path:
-                    result = send_to_hunyuan3d(alpha_path, int(yaw_deg), hunyuan_url, hunyuan_output_dir, int(pitch_deg))
+                    result = send_to_hunyuan3d(alpha_path, int(yaw_deg), hunyuan_url, hunyuan_output_dir, int(pitch_deg),turn=1)
                     if result is None:
                         print(f"[SKIP] Hunyuan3D failed for {alpha_path}, skipping rotate paste.")
                         continue
@@ -845,9 +857,9 @@ if __name__ == '__main__':
                         vanishing_point=va_pts  
                     )
                     cv_img = np.array(new_bg_img)
-                    cv_img = draw_3d_box(cv_img, box_3d_points, color=(0, 255, 0), thickness=2,
-                    triangle_pts=triangle_area)
-        cv_img = np.array(new_bg_img)
+        #             cv_img = draw_3d_box(cv_img, box_3d_points, color=(0, 255, 0), thickness=2,
+        #             triangle_pts=triangle_area)
+        # cv_img = np.array(new_bg_img)
 
             
         if num_objects % 2 == 1:
